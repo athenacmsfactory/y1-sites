@@ -50,9 +50,16 @@ jobs:
             fi
             
             # 2. Push subtree naar de doel-repo
-            # We gebruiken force om zeker te weten dat de live-versie overeenkomt met de Vault
             echo "🌍 Mirroring $SITE_NAME naar $ORG_NAME/$SITE_NAME..."
             git subtree push --prefix="$SITE_NAME" "https://x-access-token:${{ secrets.SYNC_PAT }}@github.com/$ORG_NAME/$SITE_NAME.git" main
             
-            echo "✅ $SITE_NAME is gesynchroniseerd!"
+            # 3. Activeer GitHub Pages (indien nog niet actief)
+            echo "🚀 Activeren van GitHub Pages voor $SITE_NAME..."
+            # We negeren fouten als Pages al geactiveerd is (409)
+            gh api --method POST /repos/$ORG_NAME/$SITE_NAME/pages \
+              -f "source[branch]=main" \
+              -f "source[path]=/" || echo "ℹ️ GitHub Pages is mogelijk al geactiveerd voor $SITE_NAME."
+            
+            echo "✅ $SITE_NAME is gesynchroniseerd en gepubliceerd!"
+            echo "🔗 URL: https://$ORG_NAME.github.io/$SITE_NAME/"
           done

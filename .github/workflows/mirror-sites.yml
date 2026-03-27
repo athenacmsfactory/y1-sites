@@ -1,0 +1,58 @@
+name: Mirror Sites to athenasitesy
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '.github/**'
+  workflow_dispatch:
+
+jobs:
+  mirror-sites:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Vault
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history needed for subtree split
+          token: ${{ secrets.SYNC_PAT }}
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "Athena Sync Bot"
+          git config --global user.email "bot@athenasitesy.com"
+
+      - name: Sync and Mirror Folders
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}
+          ORG_NAME: "athenasitesy"
+        run: |
+          set -e
+          
+          # Loop door elke submap in de root (sites)
+          for site_path in */; do
+            # Systeembestanden overslaan
+            if [[ "$site_path" == ".github/" || "$site_path" == ".git/" ]]; then
+              continue
+            fi
+            
+            # Mapnaam zonder slash
+            SITE_NAME=$(basename "$site_path")
+            echo "🚜 Werken aan site: $SITE_NAME..."
+            
+            # 1. Controleer of de repo in de organisatie bestaat
+            if ! gh repo view "$ORG_NAME/$SITE_NAME" > /dev/null 2>&1; then
+              echo "🆕 Repo $ORG_NAME/$SITE_NAME bestaat nog niet. Aanmaken..."
+              gh repo create "$ORG_NAME/$SITE_NAME" --public --confirm
+              
+              # Wacht even zodat GitHub de API-aanvraag verwerkt
+              sleep 2
+            fi
+            
+            # 2. Push subtree naar de doel-repo
+            # We gebruiken force om zeker te weten dat de live-versie overeenkomt met de Vault
+            echo "🌍 Mirroring $SITE_NAME naar $ORG_NAME/$SITE_NAME..."
+            git subtree push --prefix="$SITE_NAME" "https://x-access-token:${{ secrets.SYNC_PAT }}@github.com/$ORG_NAME/$SITE_NAME.git" main
+            
+            echo "✅ $SITE_NAME is gesynchroniseerd!"
+          done

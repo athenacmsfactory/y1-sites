@@ -1,65 +1,131 @@
-name: Mirror Sites to athenasitesy
+name: 🔱 Athena Y1 Vault Publisher
 
 on:
+  workflow_dispatch:
+    inputs:
+      sites:
+        description: 'Site(s) om te publiceren (spatie-gescheiden). Leeg = alle mappen.'
+        required: false
+        default: ''
   push:
-    branches: [ main ]
+    branches:
+      - main
     paths-ignore:
       - '.github/**'
-  workflow_dispatch:
+      - 'README.md'
+      - '.gitignore'
 
 jobs:
-  mirror-sites:
+  discovery:
     runs-on: ubuntu-latest
+    outputs:
+      sites: ${{ steps.set-sites.outputs.sites }}
+      any_changed: ${{ steps.set-sites.outputs.any_changed }}
     steps:
-      - name: Checkout Vault
+      - name: 🛰️ Checkout Vault
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Full history needed for subtree split
+          fetch-depth: 0
           token: ${{ secrets.SYNC_PAT }}
 
-      - name: Configure Git
+      - name: 🔍 Detect Changed Sites
+        id: set-sites
         run: |
-          git config --global user.name "Athena Sync Bot"
-          git config --global user.email "bot@athenasitesy.com"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            INPUT_SITES="${{ github.event.inputs.sites }}"
+            if [ -n "$INPUT_SITES" ]; then
+              CHANGED_SITES=$(echo "$INPUT_SITES" | jq -R -s -c 'split(" ") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')
+            else
+              # Alle mappen in de root, behalve systeemmappen
+              SITES_LIST=$(ls -d */ | grep -vE '^\.github/|^\.git/' | xargs -I{} basename {})
+              CHANGED_SITES=$(echo "$SITES_LIST" | jq -R -s -c 'split("\n") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')
+            fi
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              BEFORE="HEAD~1"
+            fi
+            # Detecteer mappen in de root die gewijzigd zijn
+            RAW_SITES=$(git diff --name-only "$BEFORE" ${{ github.event.after }} | grep -v "/" | sort -u | tr -d '\r' | xargs)
+            # Als bestanden binnen een map gewijzigd zijn
+            DEEP_SITES=$(git diff --name-only "$BEFORE" ${{ github.event.after }} | grep "/" | cut -d/ -f1 | sort -u | tr -d '\r' | xargs)
+            
+            COMBINED=$(echo "$RAW_SITES $DEEP_SITES" | xargs -n1 | sort -u | grep -vE '^\.github$|^\.git$|^README\.md$|^\.gitignore$' | xargs)
+            
+            VALID_SITES=""
+            for s in $COMBINED; do
+              if [ -d "$s" ]; then
+                VALID_SITES="$VALID_SITES $s"
+              fi
+            done
+            CHANGED_SITES=$(echo "$VALID_SITES" | xargs | jq -R -s -c 'split(" ") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')
+          fi
+          
+          if [ "$CHANGED_SITES" = "[]" ] || [ -z "$CHANGED_SITES" ]; then
+            echo "any_changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "any_changed=true" >> $GITHUB_OUTPUT
+            echo "sites=$CHANGED_SITES" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Sync and Mirror Folders
+  publish:
+    needs: discovery
+    if: needs.discovery.outputs.any_changed == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        site: ${{ fromJson(needs.discovery.outputs.sites) }}
+      fail-fast: false
+    steps:
+      - name: 🛰️ Checkout Vault
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT }}
+
+      - name: 🚀 Push Subtree to athenasitesy
         env:
           GH_TOKEN: ${{ secrets.SYNC_PAT }}
           ORG_NAME: "athenasitesy"
         run: |
-          set -e
+          SITE="${{ matrix.site }}"
+          BRANCH="${{ github.ref_name }}"
+          PREFIX="$SITE"
+          TARGET_REPO="$ORG_NAME/$SITE"
           
-          # Loop door elke submap in de root (sites)
-          for site_path in */; do
-            # Systeembestanden overslaan
-            if [[ "$site_path" == ".github/" || "$site_path" == ".git/" ]]; then
-              continue
-            fi
-            
-            # Mapnaam zonder slash
-            SITE_NAME=$(basename "$site_path")
-            echo "🚜 Werken aan site: $SITE_NAME..."
-            
-            # 1. Controleer of de repo in de organisatie bestaat
-            if ! gh repo view "$ORG_NAME/$SITE_NAME" > /dev/null 2>&1; then
-              echo "🆕 Repo $ORG_NAME/$SITE_NAME bestaat nog niet. Aanmaken..."
-              gh repo create "$ORG_NAME/$SITE_NAME" --public --confirm
-              
-              # Wacht even zodat GitHub de API-aanvraag verwerkt
-              sleep 2
-            fi
-            
-            # 2. Push subtree naar de doel-repo
-            echo "🌍 Mirroring $SITE_NAME naar $ORG_NAME/$SITE_NAME..."
-            git subtree push --prefix="$SITE_NAME" "https://x-access-token:${{ secrets.SYNC_PAT }}@github.com/$ORG_NAME/$SITE_NAME.git" main
-            
-            # 3. Activeer GitHub Pages (indien nog niet actief)
-            echo "🚀 Activeren van GitHub Pages voor $SITE_NAME..."
-            # We negeren fouten als Pages al geactiveerd is (409)
-            gh api --method POST /repos/$ORG_NAME/$SITE_NAME/pages \
-              -f "source[branch]=main" \
-              -f "source[path]=/" || echo "ℹ️ GitHub Pages is mogelijk al geactiveerd voor $SITE_NAME."
-            
-            echo "✅ $SITE_NAME is gesynchroniseerd en gepubliceerd!"
-            echo "🔗 URL: https://$ORG_NAME.github.io/$SITE_NAME/"
-          done
+          echo "🚜 Verwerken van site: $SITE"
+          
+          # 1. Zorg dat de repo bestaat
+          if ! gh repo view "$TARGET_REPO" >/dev/null 2>&1; then
+            echo "✨ Creating repo $TARGET_REPO..."
+            gh repo create "$TARGET_REPO" --public --description "Athena CMS Site: $SITE (Mirror from Vault)"
+            sleep 5
+          fi
+
+          REMOTE_URL="https://x-access-token:${{ secrets.SYNC_PAT }}@github.com/${TARGET_REPO}.git"
+          
+          # 2. Subtree Split en Push naar main
+          # Force check if prefix exists in history
+          if ! git log --format=oneline -- "$PREFIX" | head -n 1 > /dev/null; then
+             echo "⚠️ Geen historie gevonden voor $PREFIX. Overslaan."
+             exit 0
+          fi
+
+          SPLIT_SHA=$(git subtree split --prefix=$PREFIX $BRANCH)
+          echo "📤 Pushen naar $TARGET_REPO (main)..."
+          git push "$REMOTE_URL" "$SPLIT_SHA":refs/heads/main --force
+
+          # 3. KICKSTART gh-pages branch (voor publicatie)
+          echo "🚀 Voorbereiden gh-pages branch..."
+          if ! gh api repos/$TARGET_REPO/branches/gh-pages >/dev/null 2>&1; then
+            gh api --method POST /repos/$TARGET_REPO/git/refs -f ref='refs/heads/gh-pages' -f sha="$SPLIT_SHA" || true
+            sleep 5
+          fi
+
+          # 4. FAILSAFE Pages activatie
+          echo "🌐 Activeren van GitHub Pages..."
+          if ! gh api repos/$TARGET_REPO/pages >/dev/null 2>&1; then
+            gh api --method POST /repos/$TARGET_REPO/pages -f source='{"branch": "gh-pages", "path": "/"}' || true
+          fi
+          
+          echo "✅ $SITE is live: https://$ORG_NAME.github.io/$SITE/"

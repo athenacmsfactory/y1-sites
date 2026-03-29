@@ -84,6 +84,7 @@ jobs:
           token: ${{ secrets.SYNC_PAT }}
 
       - name: 🚀 Push Subtree to athenasitesy
+        env:
           GH_TOKEN: ${{ secrets.SYNC_PAT }}
           ORG_NAME: "athenasitesy"
         run: |

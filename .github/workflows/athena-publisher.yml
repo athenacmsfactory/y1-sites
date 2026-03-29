@@ -113,7 +113,7 @@ jobs:
 
           SPLIT_SHA=$(git subtree split --prefix=$PREFIX $BRANCH)
           echo "📤 Pushen naar $TARGET_REPO (main)..."
-          git push "$REMOTE_URL" "$SPLIT_SHA":refs/heads/main --force
+          git push "$REMOTE_URL" "$SPLIT_SHA":refs/heads/gh-pages --force
 
           # 3. KICKSTART gh-pages branch (voor publicatie)
           echo "🚀 Voorbereiden gh-pages branch..."

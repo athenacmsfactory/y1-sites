@@ -1,4 +1,4 @@
-name: 🔱 Athena Y1 Vault Publisher
+name: 🔱 Athena Y1 Publisher
 
 on:
   workflow_dispatch:
